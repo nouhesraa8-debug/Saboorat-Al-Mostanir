@@ -8,6 +8,6 @@ coverage/
 !.env.example
 
 # بيانات محلية وأسرار — لا تُرفع أبدًا
-data/
+/data/
 .env
 .env.local
