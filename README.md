@@ -1,20 +1,11 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# سبورة المستنير
 
-# Run and deploy your AI Studio app
+سبورة تعليمية إلكترونية تفاعلية لحلقات التحفيظ والمعلمين.
 
-This contains everything you need to run your app locally.
+## التشغيل محليًا
+1. `npm install`
+2. انسخي `.env.example` إلى `.env` واملئي القيم
+3. `npm run dev`
 
-View your app in AI Studio: https://ai.studio/apps/1a517ec4-19c2-4a18-8fd9-ba890214bfde
-
-## Run Locally
-
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## النشر
+`npm run build` ثم `npm start` (المنفذ من متغير PORT).
