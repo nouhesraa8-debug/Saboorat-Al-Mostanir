@@ -25,7 +25,11 @@ import {
   Dices,
   Users,
   Medal,
+  Youtube,
+  Facebook,
+  MessageCircle,
 } from 'lucide-react';
+import { CONTACT } from '../data/contact';
 
 interface MenuDrawerProps {
   isOpen: boolean;
@@ -539,6 +543,25 @@ export const MenuDrawer: React.FC<MenuDrawerProps> = ({
               <span>مشاركة الشاشة مع Google Meet و Zoom</span>
             </button>
           </div>
+          {/* تواصل معنا */}
+          <div className="pt-2 space-y-2" id="contact-us-section">
+            <h3 className="text-xs font-extrabold text-slate-700 dark:text-slate-200 px-1">تواصل معنا</h3>
+            <div className="grid grid-cols-1 gap-2">
+              <a href={CONTACT.youtube} target="_blank" rel="noopener noreferrer" className="w-full p-2.5 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 text-red-700 dark:text-red-300 text-xs font-bold flex items-center justify-center gap-2 hover:bg-red-100 transition-colors">
+                <Youtube className="w-4 h-4" />
+                <span>قناة أكاديمية المستنير على يوتيوب</span>
+              </a>
+              <a href={CONTACT.facebook} target="_blank" rel="noopener noreferrer" className="w-full p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60 text-blue-700 dark:text-blue-300 text-xs font-bold flex items-center justify-center gap-2 hover:bg-blue-100 transition-colors">
+                <Facebook className="w-4 h-4" />
+                <span>صفحة الأكاديمية على فيسبوك</span>
+              </a>
+              <a href={CONTACT.whatsappLink} target="_blank" rel="noopener noreferrer" className="w-full p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-xs font-bold flex items-center justify-center gap-2 hover:bg-emerald-100 transition-colors">
+                <MessageCircle className="w-4 h-4" />
+                <span>واتساب: <span dir="ltr">{CONTACT.whatsappNumber}</span></span>
+              </a>
+            </div>
+          </div>
+
         </div>
 
         {/* Drawer Footer Credit */}
