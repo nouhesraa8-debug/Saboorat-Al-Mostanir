@@ -4,6 +4,7 @@ import path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import { db } from './server/db';
+import { createStorage } from './server/storage';
 
 interface ClientInfo {
   id: string;
@@ -311,7 +312,7 @@ app.get('/api/rooms/:roomId', (req, res) => {
 });
 
 async function startServer() {
-  await db.init();
+  await db.init(await createStorage());
   for (const sig of ['SIGTERM', 'SIGINT'] as const) {
     process.on(sig, async () => { try { await db.close(); } finally { process.exit(0); } });
   }

@@ -1,22 +1,5 @@
-// طبقة التخزين: ملف JSON محلي للتطوير، أو PostgreSQL (مثل Supabase / Neon) للإنتاج.
-// يُختار Postgres تلقائيًا عند وجود المتغير DATABASE_URL.
-
-export const COLLECTIONS = ['users', 'sessions', 'boards', 'questionBank', 'classes', 'points', 'wheels'] as const;
-export type CollectionName = (typeof COLLECTIONS)[number];
-export type Snapshot = Record<CollectionName, any[]>;
-
-export interface WriteOps {
-  upserts: { col: CollectionName; id: string; data: any }[];
-  deletes: { col: CollectionName; id: string }[];
-}
-
-export interface Storage {
-  kind: 'file' | 'postgres';
-  /** يرجع null إذا كان المخزن فارغًا (أول تشغيل). */
-  load(): Promise<Snapshot | null>;
-  save(ops: WriteOps, full: () => Snapshot): Promise<void>;
-  close(): Promise<void>;
-}
+import { COLLECTIONS, CollectionName, Snapshot, WriteOps, Storage } from './storage-core';
+export * from './storage-core';
 
 // ---------- ملف JSON (تطوير محلي فقط؛ لا يصلح للاستضافة التي تمسح الملفات) ----------
 export async function createFileStorage(): Promise<Storage> {
@@ -110,7 +93,3 @@ export async function createStorage(): Promise<Storage> {
   return url ? createPostgresStorage(url) : createFileStorage();
 }
 
-/** المفتاح الذي يميّز السجل داخل كل مجموعة. */
-export function recordId(col: CollectionName, rec: any): string {
-  return col === 'sessions' ? rec.token : rec.id;
-}

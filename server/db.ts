@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { createStorage, Storage, COLLECTIONS, CollectionName, Snapshot, WriteOps, recordId } from './storage';
+import { Storage, COLLECTIONS, CollectionName, Snapshot, WriteOps, recordId } from './storage-core';
 
 export interface UserRecord {
   id: string;
@@ -294,11 +294,11 @@ class Database {
   private known = new Map<string, string>();
   private flushing: Promise<void> | null = null;
   private dirty = false;
-  private retryTimer: NodeJS.Timeout | null = null;
+  private retryTimer: any = null;
 
   /** يجب استدعاؤها مرة واحدة قبل استقبال الطلبات. */
-  async init() {
-    this.storage = await createStorage();
+  async init(storage: Storage) {
+    this.storage = storage;
     console.log(`[db] التخزين: ${this.storage.kind === 'postgres' ? 'PostgreSQL (دائم)' : 'ملف محلي (للتطوير فقط)'}`);
     const loaded = await this.storage.load();
     if (loaded) {
@@ -312,7 +312,8 @@ class Database {
     }
     this.purgeExpiredSessions();
     this.bootstrapAdmin();
-    setInterval(() => this.purgeExpiredSessions(), 60 * 60 * 1000).unref();
+    const timer: any = setInterval(() => this.purgeExpiredSessions(), 60 * 60 * 1000);
+    timer?.unref?.();
   }
 
   /** حساب الأدمن يُنشأ من متغيرات البيئة فقط، ولا توجد كلمات مرور افتراضية في الكود. */
