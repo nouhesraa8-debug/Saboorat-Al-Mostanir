@@ -839,7 +839,7 @@ export function App() {
 
   // Real-Time Classroom WebSocket Handlers
   const handleStartTeacherSession = () => {
-    const roomId = `MST-${Math.floor(1000 + Math.random() * 9000)}`;
+    const roomId = `MST-${100000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 900000)}`;
     setupWebSocket(roomId, 'teacher', 'المعلمة');
   };
 
@@ -873,6 +873,7 @@ export function App() {
         ws.send(
           JSON.stringify({
             type: 'join',
+            token: getAuthToken(),
             roomId,
             role,
             name,
@@ -886,6 +887,10 @@ export function App() {
           const msg = JSON.parse(event.data);
 
           switch (msg.type) {
+            case 'error': {
+              alert(msg.message || 'تعذر الاتصال بالغرفة');
+              break;
+            }
             case 'joined': {
               setSession({
                 active: true,
@@ -1081,7 +1086,7 @@ export function App() {
   const canDraw = session.role === 'teacher' || session.allowStudentDraw;
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-100 dark:bg-slate-950 font-sans text-slate-800 dark:text-slate-100 antialiased select-none" dir="rtl">
+    <div className="flex flex-col h-dvh w-screen overflow-hidden bg-slate-100 dark:bg-slate-950 font-sans text-slate-800 dark:text-slate-100 antialiased select-none" dir="rtl">
       {showAuth && (
         <AuthGate
           onAuthenticated={(u) => { setAuthUser(u); setShowAuth(false); }}
@@ -1091,7 +1096,7 @@ export function App() {
       {!focusMode && (
         <button
           onClick={() => (authUser && authUser.role !== 'guest' ? handleLogout() : setShowAuth(true))}
-          className="fixed bottom-3 left-3 z-40 rounded-full bg-emerald-900/90 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-emerald-800"
+          className="fixed top-[4.25rem] left-3 sm:top-auto sm:bottom-3 z-40 rounded-full bg-emerald-900/90 px-3 py-1.5 text-xs font-bold text-white shadow hover:bg-emerald-800"
           title={authUser && authUser.role !== 'guest' ? 'تسجيل الخروج' : 'تسجيل الدخول أو إنشاء حساب'}
         >
           {authUser && authUser.role !== 'guest' ? `${authUser.name} · خروج` : authUser ? 'ضيف · تسجيل الدخول' : 'تسجيل الدخول'}

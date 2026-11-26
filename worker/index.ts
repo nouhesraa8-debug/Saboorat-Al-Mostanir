@@ -3,10 +3,26 @@ import { db } from '../server/db';
 import { COLLECTIONS, Snapshot, Storage, WriteOps } from '../server/storage-core';
 
 interface Client { id: string; name: string; role: string; color: string; ws: WebSocket }
-interface Room { roomId: string; allowStudentDraw: boolean; background?: string; elements: any[]; clients: Set<Client> }
+interface Room { ownerUid: string | null; roomId: string; allowStudentDraw: boolean; background?: string; elements: any[]; clients: Set<Client> }
 
+const SEC_HEADERS: Record<string, string> = {
+  'strict-transport-security': 'max-age=31536000; includeSubDomains',
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'SAMEORIGIN',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+  'permissions-policy': 'camera=(self), microphone=(self), geolocation=(), payment=()',
+  'cache-control': 'no-store',
+};
 const J = (data: any, status = 200) =>
-  new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
+  new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', ...SEC_HEADERS } });
+
+const MAX_BODY = 12 * 1024 * 1024;
+const MAX_WS_MSG = 4 * 1024 * 1024;
+const MAX_ROOMS = 300;
+const MAX_CLIENTS_PER_ROOM = 80;
+const MAX_ELEMENTS_PER_ROOM = 5000;
+const str = (v: any, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/;
 
 export interface Env { ADMIN_EMAIL?: string; ADMIN_PASSWORD?: string; ADMIN_NAME?: string; BOARD: DurableObjectNamespace; ASSETS: Fetcher }
 
@@ -19,6 +35,16 @@ export default {
 
 export class Board extends DurableObject<Env> {
   rooms = new Map<string, Room>();
+  hits = new Map<string, number[]>();
+
+  limited(key: string, max: number, windowMs: number): boolean {
+    const now = Date.now();
+    const arr = (this.hits.get(key) || []).filter((t) => now - t < windowMs);
+    if (arr.length >= max) { this.hits.set(key, arr); return true; }
+    arr.push(now); this.hits.set(key, arr);
+    if (this.hits.size > 5000) { for (const [k, v] of this.hits) if (!v.some((t) => now - t < windowMs)) this.hits.delete(k); }
+    return false;
+  }
   ready: Promise<void>;
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -70,9 +96,15 @@ export class Board extends DurableObject<Env> {
   async handleApi(request: Request, url: URL): Promise<Response> {
     const method = request.method;
     const p = url.pathname;
+    const ip = request.headers.get('cf-connecting-ip') || 'x';
+    const origin = request.headers.get('origin');
+    if (method !== 'GET' && method !== 'HEAD' && origin && new URL(origin).host !== url.host) return J({ error: 'طلب غير مسموح' }, 403);
+    if (method === 'OPTIONS') return new Response(null, { status: 204, headers: SEC_HEADERS });
     let body: any = {};
     if (method === 'POST' || method === 'PUT') {
-      try { body = await request.json(); } catch { body = {}; }
+      const len = Number(request.headers.get('content-length') || 0);
+      if (len > MAX_BODY) return J({ error: 'الحجم كبير جدًا' }, 413);
+      try { const txt = await request.text(); if (txt.length > MAX_BODY) return J({ error: 'الحجم كبير جدًا' }, 413); body = JSON.parse(txt); } catch { body = {}; }
       if (!body || typeof body !== 'object') body = {};
     }
     const auth = request.headers.get('authorization');
@@ -87,7 +119,10 @@ export class Board extends DurableObject<Env> {
     if (p === '/api/health' && method === 'GET') return J({ status: 'ok', time: new Date().toISOString() });
 
     if (p === '/api/auth/register' && method === 'POST') {
-      const { name, email, password, role } = body;
+      if (this.limited('reg:' + ip, 30, 60 * 60 * 1000)) return J({ error: 'محاولات كثيرة، حاول لاحقًا' }, 429);
+      const name = str(body.name, 80), email = str(body.email, 200), password = typeof body.password === 'string' ? body.password : '', role = body.role;
+      if (!EMAIL_RE.test(email)) return J({ error: 'البريد الإلكتروني غير صالح' }, 400);
+      if (password.length < 8 || password.length > 200) return J({ error: 'كلمة المرور يجب ألا تقل عن 8 أحرف' }, 400);
       if (!email || !password || !name) return J({ error: 'يرجى تعبئة جميع الحقول المطلوبة (الاسم، البريد، كلمة المرور)' }, 400);
       try {
         const user = db.createUser(name, email, password, role === 'student' ? 'student' : 'teacher');
@@ -96,15 +131,18 @@ export class Board extends DurableObject<Env> {
       } catch (e: any) { return J({ error: e.message || 'فشل إنشاء الحساب' }, 400); }
     }
     if (p === '/api/auth/login' && method === 'POST') {
-      const { email, password } = body;
+      const email = str(body.email, 200), password = typeof body.password === 'string' ? body.password.slice(0, 200) : '';
       if (!email || !password) return J({ error: 'يرجى إدخال البريد الإلكتروني وكلمة المرور' }, 400);
+      if (this.limited('login:' + ip, 30, 10 * 60 * 1000) || this.limited('loginE:' + email.toLowerCase(), 8, 10 * 60 * 1000)) return J({ error: 'محاولات دخول كثيرة. انتظر عدة دقائق ثم أعد المحاولة.' }, 429);
       const user = db.authenticate(email, password);
       if (!user) return J({ error: 'البريد الإلكتروني أو كلمة المرور غير صحيحة' }, 401);
+      this.hits.delete('loginE:' + email.toLowerCase());
       const t = db.createSession({ id: user.id, role: user.role, name: user.name, email: user.email });
       return J({ token: t, user: userPayload(user) });
     }
     if (p === '/api/auth/guest' && method === 'POST') {
-      const guestId = `guest_${Date.now()}`;
+      if (this.limited('guest:' + ip, 300, 60 * 60 * 1000)) return J({ error: 'محاولات كثيرة، حاول لاحقًا' }, 429);
+      const guestId = `guest_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const t = db.createSession({ id: guestId, role: 'guest', name: 'ضيف المستنير' });
       return J({ token: t, user: { id: guestId, name: 'ضيف المستنير', email: '', role: 'guest' } });
     }
@@ -127,8 +165,10 @@ export class Board extends DurableObject<Env> {
     }
     if (p === '/api/boards' && method === 'POST') {
       const a = needAuth(); if (a) return a;
-      const { title, background, elements, thumbnail, id } = body;
+      if (session!.role === 'guest') return J({ error: 'الحفظ الدائم يتطلب حسابًا. سجّل الدخول أو أنشئ حسابًا.' }, 403);
+      const title = str(body.title, 200), background = str(body.background, 60) || 'plain', elements = Array.isArray(body.elements) ? body.elements : [], thumbnail = typeof body.thumbnail === 'string' && body.thumbnail.length < 1_500_000 ? body.thumbnail : undefined, id = typeof body.id === 'string' ? body.id : undefined;
       if (!title) return J({ error: 'عنوان السبورة مطلوب' }, 400);
+      if (!id && db.getBoards(session!.userId).length >= 300) return J({ error: 'وصلت للحد الأقصى من السبورات المحفوظة' }, 400);
       return J({ board: db.saveBoard(session!.userId, title, background, elements, thumbnail, id) });
     }
     let m = p.match(/^\/api\/boards\/([^/]+)$/);
@@ -142,11 +182,13 @@ export class Board extends DurableObject<Env> {
     }
     if (p === '/api/question-bank' && method === 'POST') {
       const a = needAuth() || needTeacher(); if (a) return a;
-      const { type, questionText, surah, options, correctAnswer, explanation, points, circleId } = body;
+      const questionText = str(body.questionText, 2000), correctAnswer = str(body.correctAnswer, 1000);
       if (!questionText || !correctAnswer) return J({ error: 'نص السؤال والإجابة الصحيحة حقول مطلوبة' }, 400);
+      if (db.getQuestions(session!.userId, session!.role).length >= 3000) return J({ error: 'وصلت للحد الأقصى من الأسئلة' }, 400);
+      const options = Array.isArray(body.options) ? body.options.slice(0, 10).map((o: any) => str(o, 500)) : [];
       const q = db.createQuestion(session!.userId, {
-        type: type || 'mcq', questionText, surah, options: options || [], correctAnswer, explanation,
-        points: Number(points) || 10, circleId,
+        type: str(body.type, 30) || 'mcq', questionText, surah: str(body.surah, 100), options, correctAnswer, explanation: str(body.explanation, 2000),
+        points: Math.min(1000, Math.max(0, Number(body.points) || 10)), circleId: typeof body.circleId === 'string' ? body.circleId.slice(0, 100) : undefined,
       } as any);
       return J({ question: q });
     }
@@ -167,13 +209,17 @@ export class Board extends DurableObject<Env> {
     }
     if (p === '/api/classes' && method === 'POST') {
       const a = needAuth() || needTeacher(); if (a) return a;
-      const { name, description, studentNames, color } = body;
+      const name = str(body.name, 100);
       if (!name) return J({ error: 'اسم الحلقة مطلوب' }, 400);
-      return J({ circle: db.createClass(session!.userId, name, description || '', studentNames || [], color) });
+      if (db.getClasses(session!.userId).length >= 200) return J({ error: 'وصلت للحد الأقصى من الحلقات' }, 400);
+      const studentNames = Array.isArray(body.studentNames) ? body.studentNames.slice(0, 300).map((s: any) => str(s, 80)) : [];
+      return J({ circle: db.createClass(session!.userId, name, str(body.description, 1000), studentNames, str(body.color, 30) || undefined) });
     }
     m = p.match(/^\/api\/classes\/([^/]+)$/);
     if (m && method === 'PUT') {
       const a = needAuth() || needTeacher(); if (a) return a;
+      if (Array.isArray(body.studentNames)) body.studentNames = body.studentNames.slice(0, 300).map((s: any) => str(s, 80));
+      if (typeof body.name === 'string') body.name = str(body.name, 100);
       const u = db.updateClass(session!.userId, decodeURIComponent(m[1]), body);
       return u ? J({ circle: u }) : J({ error: 'الحلقة غير موجودة' }, 404);
     }
@@ -187,17 +233,18 @@ export class Board extends DurableObject<Env> {
     }
     if (p === '/api/points' && method === 'POST') {
       const a = needAuth() || needTeacher(); if (a) return a;
-      const { entityName, type, pointsDelta, reason, circleId } = body;
-      if (!entityName || pointsDelta === undefined) return J({ error: 'الاسم وعدد النقاط مطلوبان' }, 400);
-      return J({ point: db.addPoints(session!.userId, entityName, type === 'team' ? 'team' : 'student', Number(pointsDelta), reason || '', circleId) });
+      const entityName = str(body.entityName, 100), pointsDelta = Number(body.pointsDelta);
+      if (!entityName || body.pointsDelta === undefined || !Number.isFinite(pointsDelta) || Math.abs(pointsDelta) > 100000) return J({ error: 'الاسم وعدد النقاط مطلوبان' }, 400);
+      return J({ point: db.addPoints(session!.userId, entityName, body.type === 'team' ? 'team' : 'student', pointsDelta, str(body.reason, 300), typeof body.circleId === 'string' ? body.circleId.slice(0, 100) : undefined) });
     }
 
     if (p === '/api/wheels' && method === 'GET') return J({ wheels: db.getWheels(session?.userId || '') });
     if (p === '/api/wheels' && method === 'POST') {
       const a = needAuth() || needTeacher(); if (a) return a;
-      const { title, items, circleId, id } = body;
-      if (!title || !items || !Array.isArray(items)) return J({ error: 'العنوان وعناصر العجلة مطلوبة' }, 400);
-      return J({ wheel: db.saveWheel(session!.userId, title, items, circleId, id) });
+      const title = str(body.title, 100);
+      if (!title || !Array.isArray(body.items)) return J({ error: 'العنوان وعناصر العجلة مطلوبة' }, 400);
+      const items = body.items.slice(0, 100).map((s: any) => str(s, 100));
+      return J({ wheel: db.saveWheel(session!.userId, title, items, typeof body.circleId === 'string' ? body.circleId.slice(0, 100) : undefined, typeof body.id === 'string' ? body.id : undefined) });
     }
     m = p.match(/^\/api\/wheels\/([^/]+)$/);
     if (m && method === 'DELETE') {
@@ -229,6 +276,10 @@ export class Board extends DurableObject<Env> {
 
   handleWs(request: Request): Response {
     if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected websocket', { status: 426 });
+    const wo = request.headers.get('origin');
+    if (wo && new URL(wo).host !== new URL(request.url).host) return new Response('Forbidden', { status: 403 });
+    const wip = request.headers.get('cf-connecting-ip') || 'x';
+    if (this.limited('ws:' + wip, 60, 60 * 1000)) return new Response('Too many connections', { status: 429 });
     const pair = new WebSocketPair();
     const ws = pair[1];
     ws.accept();
@@ -237,18 +288,33 @@ export class Board extends DurableObject<Env> {
 
     ws.addEventListener('message', (ev: MessageEvent) => {
       try {
-        const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data as ArrayBuffer));
+        const raw = typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data as ArrayBuffer);
+        if (raw.length > MAX_WS_MSG) return;
+        const msg = JSON.parse(raw);
         const room = roomId ? this.rooms.get(roomId) : undefined;
         switch (msg.type) {
           case 'join': {
-            const { role, name, color } = msg;
-            roomId = String(msg.roomId);
-            let r = this.rooms.get(roomId);
-            if (!r) { r = { roomId, allowStudentDraw: false, elements: [], clients: new Set() }; this.rooms.set(roomId, r); }
+            if (me) return;
+            const rid = str(msg.roomId, 40);
+            if (!rid) return;
+            const sess = typeof msg.token === 'string' ? db.getSession(msg.token) : null;
+            let r = this.rooms.get(rid);
+            let role: string = msg.role === 'teacher' ? 'teacher' : 'student';
+            if (!r) {
+              if (role !== 'teacher' || this.rooms.size >= MAX_ROOMS) { ws.send(JSON.stringify({ type: 'error', message: 'الغرفة غير موجودة' })); return; }
+              r = { roomId: rid, ownerUid: sess ? sess.userId : null, allowStudentDraw: false, elements: [], clients: new Set() };
+              this.rooms.set(rid, r);
+            } else if (role === 'teacher') {
+              const teacherOnline = Array.from(r.clients).some((c) => c.role === 'teacher');
+              if (r.ownerUid ? !sess || sess.userId !== r.ownerUid : teacherOnline) role = 'student';
+            }
+            if (r.clients.size >= MAX_CLIENTS_PER_ROOM) { ws.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' })); return; }
+            roomId = rid;
+            const color = /^#[0-9a-fA-F]{3,8}$/.test(String(msg.color)) ? String(msg.color) : '#2563eb';
             me = {
               id: `user_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-              name: name || (role === 'teacher' ? 'المعلم' : 'طالب'),
-              role: role || 'student', color: color || '#2563eb', ws,
+              name: str(msg.name, 60) || (role === 'teacher' ? 'المعلم' : 'طالب'),
+              role, color, ws,
             };
             r.clients.add(me);
             ws.send(JSON.stringify({
@@ -261,11 +327,11 @@ export class Board extends DurableObject<Env> {
           case 'element_add':
             if (!room || !roomId) return;
             if (me?.role === 'student' && !room.allowStudentDraw) return;
-            if (msg.element) { room.elements.push(msg.element); this.broadcast(roomId, { type: 'element_added', element: msg.element }, ws); }
+            if (msg.element && typeof msg.element === 'object' && room.elements.length < MAX_ELEMENTS_PER_ROOM) { room.elements.push(msg.element); this.broadcast(roomId, { type: 'element_added', element: msg.element }, ws); }
             break;
           case 'elements_batch':
             if (!room || !roomId) return;
-            if (me?.role === 'teacher' && Array.isArray(msg.elements)) {
+            if (me?.role === 'teacher' && Array.isArray(msg.elements) && msg.elements.length <= MAX_ELEMENTS_PER_ROOM) {
               room.elements = msg.elements;
               this.broadcast(roomId, { type: 'sync_all_elements', elements: room.elements }, ws);
             }

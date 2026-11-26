@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { Storage, COLLECTIONS, CollectionName, Snapshot, WriteOps, recordId } from './storage-core';
 
 export interface UserRecord {
+  iter?: number;
   id: string;
   email: string;
   passwordHash: string;
@@ -86,204 +87,25 @@ interface DatabaseSchema {
   wheels: WheelRecord[];
 }
 
-function hashPassword(password: string, salt?: string): { hash: string; salt: string } {
+const PBKDF2_ITER = 100000;
+
+function hashPassword(password: string, salt?: string, iter = PBKDF2_ITER): { hash: string; salt: string; iter: number } {
   const finalSalt = salt || crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, finalSalt, 10000, 64, 'sha512').toString('hex');
-  return { hash, salt: finalSalt };
+  const hash = crypto.pbkdf2Sync(password, finalSalt, iter, 64, 'sha512').toString('hex');
+  return { hash, salt: finalSalt, iter };
 }
 
-function verifyPassword(password: string, hash: string, salt: string): boolean {
-  const calc = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
-  return calc === hash;
+function verifyPassword(password: string, hash: string, salt: string, iter = 10000): boolean {
+  const calc = Buffer.from(crypto.pbkdf2Sync(password, salt, iter, 64, 'sha512').toString('hex'));
+  const exp = Buffer.from(hash);
+  return calc.length === exp.length && crypto.timingSafeEqual(calc, exp);
 }
 
 function emptyData(): DatabaseSchema {
   return { users: [], sessions: [], boards: [], questionBank: [], classes: [], points: [], wheels: [] };
 }
 
-// Demo data (لا تُستخدم إلا مع SEED_DEMO=true — تحتوي حسابات تجريبية بكلمات مرور معروفة، ممنوع في الإنتاج)
-// Initial seed data for production-grade experience
-function getInitialSeedData(): DatabaseSchema {
-  const teacherPass = hashPassword('mustanir123');
-  const studentPass = hashPassword('student123');
 
-  const teacherUser: UserRecord = {
-    id: 'user_teacher_default',
-    email: 'admin@almustanir.edu',
-    passwordHash: teacherPass.hash,
-    salt: teacherPass.salt,
-    name: 'المعلم إسماعيل',
-    role: 'teacher',
-    createdAt: Date.now(),
-  };
-
-  const studentUser: UserRecord = {
-    id: 'user_student_default',
-    email: 'student@almustanir.edu',
-    passwordHash: studentPass.hash,
-    salt: studentPass.salt,
-    name: 'عبدالرحمن علي',
-    role: 'student',
-    createdAt: Date.now(),
-  };
-
-  const initialQuestions: QuestionRecord[] = [
-    {
-      id: 'q_1',
-      userId: teacherUser.id,
-      type: 'complete_verse',
-      surah: 'سورة الفاتحة',
-      questionText: 'أكمل الآية الكريمة: ﴿ صِرَاطَ الَّذِينَ أَنْعَمْتَ عَلَيْهِمْ غَيْرِ الْمَغْضُوبِ عَلَيْهِمْ وَلَا ... ﴾',
-      options: ['الضَّالِّينَ', 'الْمُهْتَدِينَ', 'الْخَاسِرِينَ'],
-      correctAnswer: 'الضَّالِّينَ',
-      explanation: 'الآية السابعة من سورة الفاتحة: ﴿ صِرَاطَ الَّذِينَ أَنْعَمْتَ عَلَيْهِمْ غَيْرِ الْمَغْضُوبِ عَلَيْهِمْ وَلَا الضَّالِّينَ ﴾',
-      points: 10,
-      createdAt: Date.now() - 3600000,
-    },
-    {
-      id: 'q_2',
-      userId: teacherUser.id,
-      type: 'tajweed',
-      surah: 'أحكام النون الساكنة',
-      questionText: 'ما هو حكم النون الساكنة في قوله تعالى: ﴿ مِنْ بَعْدِ ﴾؟',
-      options: ['إقلاب (قلب النون ميماً)', 'إظهار حلقي', 'إدغام بغنة', 'إخفاء حقيقي'],
-      correctAnswer: 'إقلاب (قلب النون ميماً)',
-      explanation: 'حكم النون الساكنة عند حرف الباء هو الإقلاب، فتقلب النون ميماً مخفاة بغنة.',
-      points: 10,
-      createdAt: Date.now() - 3000000,
-    },
-    {
-      id: 'q_3',
-      userId: teacherUser.id,
-      type: 'match_surah',
-      surah: 'سورة العصر',
-      questionText: 'في أي سورة وردت هذه الآية الكريمة: ﴿ وَتَوَاصَوْا بِالْحَقِّ وَتَوَاصَوْا بِالصَّبْرِ ﴾؟',
-      options: ['سورة العصر', 'سورة البلد', 'سورة الفجر', 'سورة الشمس'],
-      correctAnswer: 'سورة العصر',
-      explanation: 'خاتمة سورة العصر: ﴿ إِلَّا الَّذِينَ آمَنُوا وَعَمِلُوا الصَّالِحَاتِ وَتَوَاصَوْا بِالْحَقِّ وَتَوَاصَوْا بِالصَّبْرِ ﴾',
-      points: 10,
-      createdAt: Date.now() - 2500000,
-    },
-    {
-      id: 'q_4',
-      userId: teacherUser.id,
-      type: 'true_false',
-      surah: 'سورة الإخلاص',
-      questionText: 'سورة الإخلاص تعدل ثلث القرآن الكريم في الأجر والثواب.',
-      options: ['صح', 'خطأ'],
-      correctAnswer: 'صح',
-      explanation: 'صح، ثبت في صحيح البخاري عن النبي ﷺ أن ﴿ قُلْ هُوَ اللَّهُ أَحَدٌ ﴾ تعدل ثلث القرآن.',
-      points: 5,
-      createdAt: Date.now() - 2000000,
-    },
-    {
-      id: 'q_5',
-      userId: teacherUser.id,
-      type: 'vocabulary',
-      surah: 'سورة الفلق',
-      questionText: 'ما معنى قوله تعالى: ﴿ وَمِن شَرِّ غَاسِقٍ إِذَا وَقَبَ ﴾؟',
-      options: ['الليل إذا دخل واشتد ظلامه', 'الساحر إذا عقد السحر', 'الحاسد إذا بدأ يحسد', 'الشمس إذا غابت'],
-      correctAnswer: 'الليل إذا دخل واشتد ظلامه',
-      explanation: 'الغاسق: الليل، ووقب: دخل واشتدت ظلمته.',
-      points: 10,
-      createdAt: Date.now() - 1500000,
-    },
-    {
-      id: 'q_6',
-      userId: teacherUser.id,
-      type: 'mcq',
-      surah: 'القرآن الكريم',
-      questionText: 'كم عدد سور القرآن الكريم؟',
-      options: ['114 سورة', '112 سورة', '110 سور', '120 سورة'],
-      correctAnswer: '114 سورة',
-      explanation: 'عدد سور القرآن الكريم المتفق عليها هو 114 سورة.',
-      points: 5,
-      createdAt: Date.now() - 1000000,
-    },
-  ];
-
-  const initialClasses: CircleRecord[] = [
-    {
-      id: 'circle_furqan',
-      teacherId: teacherUser.id,
-      name: 'حلقة الفرقان لتحفيظ القرآن',
-      description: 'حلقة تحفيظ ومراجعة جزء عمّ والممتازين في التجويد',
-      studentNames: ['عمر أحمد', 'فاطمة محمود', 'عبدالرحمن علي', 'مريم يوسف', 'إبراهيم خالد', 'سارة حسن'],
-      color: '#059669',
-      createdAt: Date.now() - 86400000,
-    },
-    {
-      id: 'circle_itqan',
-      teacherId: teacherUser.id,
-      name: 'حلقة الإتقان والتلاوة',
-      description: 'حلقة التسميع المتقن وضبط مخارج الحروف والصفات',
-      studentNames: ['أحمد ياسين', 'خديجة محمد', 'يوسف كريم', 'عائشة بلال'],
-      color: '#0284c7',
-      createdAt: Date.now() - 43200000,
-    },
-  ];
-
-  const initialPoints: PointRecord[] = [
-    {
-      id: 'pts_1',
-      teacherId: teacherUser.id,
-      circleId: 'circle_furqan',
-      entityName: 'فريق الفرسان',
-      type: 'team',
-      score: 45,
-      reasons: ['إجابة السؤال الأول بنجاح', 'تسميع ربع سورة النبأ'],
-      updatedAt: Date.now(),
-    },
-    {
-      id: 'pts_2',
-      teacherId: teacherUser.id,
-      circleId: 'circle_furqan',
-      entityName: 'فريق النور',
-      type: 'team',
-      score: 50,
-      reasons: ['استخراج أحكام التجويد', 'حفظ متقن بدون أخطاء'],
-      updatedAt: Date.now(),
-    },
-    {
-      id: 'pts_3',
-      teacherId: teacherUser.id,
-      circleId: 'circle_furqan',
-      entityName: 'عبدالرحمن علي',
-      type: 'student',
-      score: 30,
-      reasons: ['وسام الحفظ المتقن 🥇'],
-      updatedAt: Date.now(),
-    },
-  ];
-
-  const initialWheels: WheelRecord[] = [
-    {
-      id: 'wheel_tasks',
-      userId: teacherUser.id,
-      title: 'عجلة مهام وتحديات الحلقة',
-      circleId: 'circle_furqan',
-      items: [
-        'تسميع 3 آيات غيباً 📖',
-        'استخراج حكم تجويدي 💎',
-        'تسميع ربع الحزب 🌟',
-        'الفوز بـ وسام ونجمة ذهبية 🥇',
-        'تفسير معنى كلمة قرآنية 💡',
-        'تلاوة بترتيل خاشع 🕊️',
-      ],
-      createdAt: Date.now(),
-    },
-  ];
-
-  return {
-    users: [teacherUser, studentUser],
-    sessions: [],
-    boards: [],
-    questionBank: initialQuestions,
-    classes: initialClasses,
-    points: initialPoints,
-    wheels: initialWheels,
-  };
-}
 
 class Database {
   private data: DatabaseSchema = {
@@ -307,7 +129,7 @@ class Database {
         for (const r of (this.data as any)[c]) this.known.set(`${c}:${recordId(c, r)}`, JSON.stringify(r));
       }
     } else {
-      this.data = process.env.SEED_DEMO === 'true' ? getInitialSeedData() : emptyData();
+      this.data = emptyData();
       await this.flushNow();
     }
     this.purgeExpiredSessions();
@@ -321,12 +143,13 @@ class Database {
     const email = process.env.ADMIN_EMAIL;
     const pass = process.env.ADMIN_PASSWORD;
     if (!email || !pass || this.findUserByEmail(email)) return;
-    const { hash, salt } = hashPassword(pass);
+    const { hash, salt, iter } = hashPassword(pass);
     this.data.users.push({
       id: `user_admin_${crypto.randomBytes(4).toString('hex')}`,
       email: email.toLowerCase().trim(),
       passwordHash: hash,
       salt,
+      iter,
       name: process.env.ADMIN_NAME || 'مدير المنصة',
       role: 'admin',
       createdAt: Date.now(),
@@ -414,12 +237,13 @@ class Database {
       throw new Error('هذا البريد الإلكتروني مسجل مسبقاً');
     }
 
-    const { hash, salt } = hashPassword(password);
+    const { hash, salt, iter } = hashPassword(password);
     const newUser: UserRecord = {
       id: `user_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
       email: email.toLowerCase().trim(),
       passwordHash: hash,
       salt,
+      iter,
       name: name.trim() || (role === 'teacher' ? 'المعلم' : 'طالب المستنير'),
       role,
       createdAt: Date.now(),
@@ -433,7 +257,12 @@ class Database {
   authenticate(email: string, password: string): UserRecord | null {
     const user = this.findUserByEmail(email);
     if (!user) return null;
-    if (verifyPassword(password, user.passwordHash, user.salt)) {
+    if (verifyPassword(password, user.passwordHash, user.salt, user.iter || 10000)) {
+      if (!user.iter || user.iter < PBKDF2_ITER) {
+        const h = hashPassword(password);
+        user.passwordHash = h.hash; user.salt = h.salt; user.iter = h.iter;
+        this.saveData();
+      }
       return user;
     }
     return null;
@@ -442,9 +271,10 @@ class Database {
   resetPassword(email: string, newPass: string): boolean {
     const user = this.findUserByEmail(email);
     if (!user) return false;
-    const { hash, salt } = hashPassword(newPass);
+    const { hash, salt, iter } = hashPassword(newPass);
     user.passwordHash = hash;
     user.salt = salt;
+    user.iter = iter;
     this.saveData();
     return true;
   }
@@ -531,11 +361,11 @@ class Database {
   // --- Question Bank ---
   getQuestions(userId: string, role: string): QuestionRecord[] {
     // Teachers see questions they created, plus global seed questions; students can view questions for quiz
-    if (role === 'teacher') {
+    if (role === 'teacher' || role === 'admin') {
       return this.data.questionBank.filter((q) => q.userId === userId || q.userId === 'user_teacher_default');
     }
-    // Students get all active questions for interactive tests
-    return this.data.questionBank;
+    // غير المعلمين (ضيف/طالب/زائر) لا يرون إلا الأسئلة العامة، وليس أسئلة المعلمين الخاصة
+    return this.data.questionBank.filter((q) => q.userId === 'user_teacher_default');
   }
 
   createQuestion(userId: string, data: Omit<QuestionRecord, 'id' | 'userId' | 'createdAt'>): QuestionRecord {
@@ -553,7 +383,10 @@ class Database {
   updateQuestion(userId: string, id: string, data: Partial<QuestionRecord>): QuestionRecord | null {
     const idx = this.data.questionBank.findIndex((q) => q.id === id && (q.userId === userId || q.userId === 'user_teacher_default'));
     if (idx === -1) return null;
-    this.data.questionBank[idx] = { ...this.data.questionBank[idx], ...data };
+    const allowed = ['type','questionText','surah','options','correctAnswer','explanation','points','circleId'];
+    const clean: any = {};
+    for (const k of allowed) if ((data as any)[k] !== undefined) clean[k] = (data as any)[k];
+    this.data.questionBank[idx] = { ...this.data.questionBank[idx], ...clean };
     this.saveData();
     return this.data.questionBank[idx];
   }
@@ -589,7 +422,10 @@ class Database {
   updateClass(teacherId: string, id: string, updates: Partial<CircleRecord>): CircleRecord | null {
     const idx = this.data.classes.findIndex((c) => c.id === id && (c.teacherId === teacherId || c.teacherId === 'user_teacher_default'));
     if (idx === -1) return null;
-    this.data.classes[idx] = { ...this.data.classes[idx], ...updates };
+    const allowedC = ['name','description','studentNames','color'];
+    const cleanC: any = {};
+    for (const k of allowedC) if ((updates as any)[k] !== undefined) cleanC[k] = (updates as any)[k];
+    this.data.classes[idx] = { ...this.data.classes[idx], ...cleanC };
     this.saveData();
     return this.data.classes[idx];
   }

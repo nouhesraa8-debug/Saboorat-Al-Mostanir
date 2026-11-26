@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import defaultLogoImage from '../assets/images/almustanir_academy_logo_1789066569620.jpg';
+import defaultLogoImage from '../assets/images/logo.png';
 
 interface OfficialLogoProps {
   className?: string;

@@ -216,7 +216,7 @@ export const BottomToolbar: React.FC<BottomToolbarProps> = ({
     <div
       ref={toolbarRef}
       id="whiteboard-bottom-toolbar"
-      className="relative shrink-0 w-full px-2 sm:px-4 py-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/90 dark:border-slate-800 flex items-center justify-between z-30 select-none shadow-md transition-all duration-300"
+      className="relative shrink-0 w-full px-2 sm:px-4 py-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200/90 dark:border-slate-800 flex flex-wrap sm:flex-nowrap gap-y-1 items-center justify-between pb-[max(0.5rem,env(safe-area-inset-bottom))] z-30 select-none shadow-md transition-all duration-300"
       dir="rtl"
     >
       {/* 1. History & Modification: Undo, Redo, Delete, Clear All */}
